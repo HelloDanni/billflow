@@ -77,6 +77,12 @@ const makeId = () => {
 const normalizeAmount = (value: number) => Math.round(value * 100) / 100;
 
 const getMonthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+const getDayFromISODate = (iso: string) => {
+  const parts = iso.split('-');
+  if (parts.length < 3) return 1;
+  const day = Number(parts[2]);
+  return Number.isNaN(day) ? 1 : day;
+};
 
 const CURRENT_MONTH_KEY = getMonthKey(new Date());
 
@@ -92,16 +98,12 @@ const daysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth()
 const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const billRecurrenceOptions = [
+  { value: 0, label: 'One-time' },
   { value: 1, label: 'Monthly' },
   { value: 3, label: 'Every 3 Months' },
   { value: 6, label: 'Every 6 Months' },
   { value: 12, label: 'Annual' },
 ];
-
-const billRecurrenceLabels = billRecurrenceOptions.reduce<Record<number, string>>((acc, option) => {
-  acc[option.value] = option.label;
-  return acc;
-}, {});
 
 const incomeRecurrenceOptions: { value: IncomeRecurrence; label: string }[] = [
   { value: 'none', label: 'One-time' },
@@ -122,6 +124,9 @@ type IncomeOccurrence = {
   source: string;
 };
 
+type WeekBill = { bill: Bill; date: Date };
+type WeekSummary = { label: string; due: number; remaining: number; hasCurrent: boolean; bills: WeekBill[] };
+
 const isValidMonthKey = (key?: string | null): key is string => Boolean(key && /^\d{4}-\d{2}$/.test(key));
 
 const monthsBetween = (startKey: string, target: Date) => {
@@ -133,7 +138,11 @@ const monthsBetween = (startKey: string, target: Date) => {
 
 const isBillDueInMonth = (bill: Bill, month: Date) => {
   const diff = monthsBetween(bill.startMonth, month);
-  return diff >= 0 && diff % bill.recurrence === 0;
+  if (diff < 0) return false;
+  if (bill.recurrence <= 0) {
+    return diff === 0;
+  }
+  return diff % bill.recurrence === 0;
 };
 
 const startOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1);
@@ -241,8 +250,16 @@ function App() {
   const [incomes, setIncomes] = usePersistentState<IncomeEntry[]>('billflow:income', DEFAULT_INCOME);
   const [payments, setPayments] = usePersistentState<PaymentState>('billflow:payments', {});
   const [collapsedSections, setCollapsedSections] = usePersistentState<CollapsibleSectionConfig>('billflow:sections', {});
+  const [openWeekLabel, setOpenWeekLabel] = useState<string | null>(null);
 
-  const billFormDefaults = { name: '', amount: '', dueDay: '1', recurrence: '1', notes: '' };
+  const billFormDefaults = {
+    name: '',
+    amount: '',
+    dueDay: String(today.getDate()),
+    recurrence: '1',
+    notes: '',
+    date: today.toISOString().slice(0, 10),
+  };
   const [billForm, setBillForm] = useState(billFormDefaults);
   const [incomeForm, setIncomeForm] = useState({
     source: '',
@@ -259,6 +276,9 @@ function App() {
 
   const moveMonth = (delta: number) => {
     setVisibleMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
+  };
+  const toggleWeekDetails = (label: string) => {
+    setOpenWeekLabel((prev) => (prev === label ? null : label));
   };
 
   const normalizedBills = useMemo(() => {
@@ -322,8 +342,8 @@ function App() {
 
   const monthlyIncome = useMemo(() => expandedIncomes.reduce((sum, income) => sum + income.amount, 0), [expandedIncomes]);
 
-  const weeklyBreakdown = useMemo(() => {
-    const weeks = [];
+  const weeklyBreakdown = useMemo<WeekSummary[]>(() => {
+    const weeks: WeekSummary[] = [];
     for (let i = 0; i < calendarCells.length; i += 7) {
       const slice = calendarCells.slice(i, i + 7);
       const weekDue = slice.reduce(
@@ -341,7 +361,8 @@ function App() {
         { month: 'short', day: 'numeric' }
       )}`;
       const hasCurrent = slice.some((cell) => cell.inCurrentMonth);
-      weeks.push({ label, due: weekDue, remaining: weekDue - weekPaid, hasCurrent });
+      const billsInWeek = slice.flatMap((cell) => cell.bills.map((bill) => ({ bill, date: cell.date })));
+      weeks.push({ label, due: weekDue, remaining: weekDue - weekPaid, hasCurrent, bills: billsInWeek });
     }
     return weeks.filter((week) => week.hasCurrent);
   }, [calendarCells, activePayments]);
@@ -350,9 +371,10 @@ function App() {
     event.preventDefault();
     const name = billForm.name.trim();
     const amount = Number(billForm.amount);
-    const dueDay = Number(billForm.dueDay);
-    const recurrence = Number(billForm.recurrence || '1');
-    if (!name || amount <= 0 || dueDay < 1 || dueDay > 31 || !recurrence) return;
+    const dueDay = billForm.date ? getDayFromISODate(billForm.date) : Number(billForm.dueDay);
+    const recurrence = Number(billForm.recurrence ?? '1');
+    if (!name || amount <= 0 || dueDay < 1 || dueDay > 31 || Number.isNaN(recurrence) || recurrence < 0) return;
+    const startMonthFromDate = billForm.date ? billForm.date.slice(0, 7) : monthKey;
 
     setBills((prev) => {
       const next: Bill = {
@@ -361,7 +383,7 @@ function App() {
         amount: normalizeAmount(amount),
         dueDay,
         recurrence,
-        startMonth: monthKey,
+        startMonth: startMonthFromDate,
         notes: billForm.notes.trim() || undefined,
       };
       return [...prev, next];
@@ -529,9 +551,6 @@ function App() {
                                   {currency(bill.amount)}
                                 </span>
                               </div>
-                              <p className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
-                                {billRecurrenceLabels[bill.recurrence] ?? 'Recurring'}
-                              </p>
                               {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
                               <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
                                 <button
@@ -573,23 +592,56 @@ function App() {
               onToggle={toggleSection}
             >
               <ul className="space-y-3">
-                {weeklyBreakdown.map((week) => (
-                  <li
-                    key={week.label}
-                    className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm"
-                  >
-                    <div className="flex items-center justify-between font-semibold text-slate-100">
-                      <span>{week.label}</span>
-                      <span>{currency(week.due)}</span>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      Remaining:&nbsp;
-                      <span className={week.remaining === 0 ? 'text-emerald-300' : 'text-amber-300'}>
-                        {currency(week.remaining)}
-                      </span>
-                    </p>
-                  </li>
-                ))}
+                {weeklyBreakdown.map((week) => {
+                  const isOpen = openWeekLabel === week.label;
+                  return (
+                    <li
+                      key={week.label}
+                      className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleWeekDetails(week.label)}
+                        className="w-full text-left"
+                        aria-expanded={isOpen}
+                      >
+                        <div className="flex items-center justify-between font-semibold text-slate-100">
+                          <span>{week.label}</span>
+                          <span>{currency(week.due)}</span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          Remaining:&nbsp;
+                          <span className={week.remaining === 0 ? 'text-emerald-300' : 'text-amber-300'}>
+                            {currency(week.remaining)}
+                          </span>
+                        </p>
+                        <p className="mt-1 text-[11px] uppercase tracking-wide text-slate-500">
+                          {isOpen ? 'Hide bills' : 'Show bills'}
+                        </p>
+                      </button>
+                      {isOpen && (
+                        <div className="mt-3 space-y-2 rounded-lg border border-slate-800/80 bg-slate-950/30 p-3 text-xs sm:text-sm">
+                          {week.bills.length > 0 ? (
+                            week.bills.map(({ bill, date }) => (
+                              <div
+                                key={`${week.label}-${bill.id}-${date.toISOString()}`}
+                                className="flex items-center justify-between gap-3 text-slate-200"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate font-semibold text-slate-100">{bill.name}</p>
+                                  <p className="text-[11px] text-slate-500">{date.toLocaleDateString()}</p>
+                                </div>
+                                <span className="shrink-0 font-semibold">{currency(bill.amount)}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs text-slate-500">No bills scheduled this week.</p>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
                 {weeklyBreakdown.length === 0 && <li className="text-sm text-slate-500">No bills scheduled this month.</li>}
               </ul>
             </CollapsibleSection>
@@ -641,8 +693,8 @@ function App() {
         <div className="mt-6 flex flex-col gap-6">
           <CollapsibleSection
             id="add-bill"
-            title="Add Bill"
-            description="Keep recurring expenses organized."
+            title="Add Expense"
+            description="Keep expenses organized."
             collapsed={Boolean(collapsedSections['add-bill'])}
             onToggle={toggleSection}
           >
@@ -668,18 +720,23 @@ function App() {
                   required
                 />
               </label>
-              <label className="text-sm">
-                <span className="text-slate-300">Due Day</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={billForm.dueDay}
-                  onChange={(e) => setBillForm((prev) => ({ ...prev, dueDay: e.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                  required
-                />
-              </label>
+                <label className="text-sm">
+                  <span className="text-slate-300">Date</span>
+                  <input
+                    type="date"
+                    value={billForm.date}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setBillForm((prev) => ({
+                        ...prev,
+                        date: value,
+                        dueDay: value ? String(getDayFromISODate(value)) : prev.dueDay,
+                      }));
+                    }}
+                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                    required
+                  />
+                </label>
               <label className="text-sm">
                 <span className="text-slate-300">Recurrence</span>
                 <select
@@ -703,12 +760,12 @@ function App() {
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
                 />
               </label>
-              <button
-                type="submit"
-                className="mt-2 rounded-xl bg-emerald-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-              >
-                Save Bill
-              </button>
+                <button
+                  type="submit"
+                  className="mt-2 rounded-xl bg-emerald-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+                >
+                  Save Expense
+                </button>
             </form>
           </CollapsibleSection>
 
