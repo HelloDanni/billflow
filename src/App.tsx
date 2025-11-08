@@ -436,7 +436,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 lg:px-6">
+      <div className="mx-auto flex w-full max-w-[1920px] flex-col gap-6 px-3 py-8 sm:px-5 lg:px-8">
         <CollapsibleSection
           id="overview"
           title="Budget Overview"
@@ -479,77 +479,92 @@ function App() {
           </dl>
         </CollapsibleSection>
 
-        <main className="grid gap-6 lg:grid-cols-[2fr,1fr]">
+        <main className="grid gap-6 lg:grid-cols-3">
           <CollapsibleSection
             id="calendar"
             title="Bill Calendar"
             description="Visualize all due dates for the month."
-            containerClassName="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-6"
+            containerClassName="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-6 lg:col-span-2"
             collapsed={Boolean(collapsedSections['calendar'])}
             onToggle={toggleSection}
           >
-            <div className="grid grid-cols-7 gap-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">
-              {dayName.map((day) => (
-                <div key={day}>{day}</div>
-              ))}
-            </div>
-            <div className="mt-2 grid grid-cols-7 gap-2">
-              {calendarCells.map((cell) => (
-                <div
-                  key={cell.key}
-                  className={`min-h-[120px] rounded-xl border p-2 text-sm ${
-                    cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
-                    {cell.bills.length > 0 && (
-                      <span className="text-[11px] text-slate-400">{currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}</span>
-                    )}
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    {cell.bills.map((bill) => {
-                      const paid = Boolean(activePayments[bill.id]);
-                      return (
-                        <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-xs">
-                          <div className="flex items-center justify-between gap-2 font-medium">
-                            <span className={paid ? 'text-slate-500 line-through' : 'text-slate-100'}>{bill.name}</span>
-                            <span className={paid ? 'text-emerald-400' : 'text-slate-100'}>{currency(bill.amount)}</span>
-                          </div>
-                          <p className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
-                            {billRecurrenceLabels[bill.recurrence] ?? 'Recurring'}
-                          </p>
-                          {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
-                          <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
-                            <button
-                              onClick={() => togglePaid(bill.id)}
-                              className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
-                                paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
-                              }`}
-                            >
-                              {paid ? 'Paid' : 'Mark Paid'}
-                            </button>
-                            <button
-                              onClick={() => deleteBill(bill)}
-                              className="text-slate-500 transition hover:text-rose-400"
-                              aria-label={`Delete ${bill.name}`}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {cell.inCurrentMonth && cell.bills.length === 0 && (
-                      <p className="text-[11px] text-slate-500">No bills</p>
-                    )}
-                  </div>
+            <div className="mt-2 overflow-x-auto">
+              <div className="min-w-[640px] space-y-2 pr-2 lg:min-w-0">
+                <div className="grid grid-cols-7 gap-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  {dayName.map((day) => (
+                    <div key={day}>{day}</div>
+                  ))}
                 </div>
-              ))}
+                <div className="grid grid-cols-7 gap-2 sm:gap-3">
+                  {calendarCells.map((cell) => (
+                    <div
+                      key={cell.key}
+                      className={`min-h-[100px] overflow-hidden rounded-xl border p-2 text-xs sm:min-h-[120px] sm:text-sm sm:p-3 ${
+                        cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600'
+                      }`}
+                    >
+                      <div className="flex min-w-0 items-center gap-1 text-xs font-semibold">
+                        <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
+                        {cell.bills.length > 0 && (
+                          <span className="ml-auto truncate text-[11px] text-slate-400">
+                            {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        {cell.bills.map((bill) => {
+                          const paid = Boolean(activePayments[bill.id]);
+                          return (
+                            <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-xs">
+                              <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
+                                <span className="sr-only sm:hidden">{bill.name}</span>
+                                <span
+                                  className={`${
+                                    paid ? 'text-slate-500 line-through' : 'text-slate-100'
+                                  } hidden min-w-0 truncate sm:inline`}
+                                >
+                                  {bill.name}
+                                </span>
+                                <span className={`${paid ? 'text-emerald-400' : 'text-slate-100'} shrink-0`}>
+                                  {currency(bill.amount)}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
+                                {billRecurrenceLabels[bill.recurrence] ?? 'Recurring'}
+                              </p>
+                              {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
+                              <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                                <button
+                                  onClick={() => togglePaid(bill.id)}
+                                  className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
+                                    paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
+                                  }`}
+                                >
+                                  {paid ? 'Paid' : 'Mark Paid'}
+                                </button>
+                                <button
+                                  onClick={() => deleteBill(bill)}
+                                  className="text-slate-500 transition hover:text-rose-400"
+                                  aria-label={`Delete ${bill.name}`}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {cell.inCurrentMonth && cell.bills.length === 0 && (
+                          <p className="text-[11px] text-slate-500">No bills</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </CollapsibleSection>
 
-          <aside className="flex flex-col gap-5">
+          <aside className="flex flex-col gap-5 lg:col-span-1">
             <CollapsibleSection
               id="weekly"
               title="Weekly Totals"
@@ -620,143 +635,145 @@ function App() {
                 )}
               </div>
             </CollapsibleSection>
-
-            <CollapsibleSection
-              id="add-bill"
-              title="Add Bill"
-              description="Keep recurring expenses organized."
-              collapsed={Boolean(collapsedSections['add-bill'])}
-              onToggle={toggleSection}
-            >
-              <form className="flex flex-col gap-3" onSubmit={handleBillSubmit}>
-                <label className="text-sm">
-                  <span className="text-slate-300">Name</span>
-                  <input
-                    type="text"
-                    value={billForm.name}
-                    onChange={(e) => setBillForm((prev) => ({ ...prev, name: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Amount</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={billForm.amount}
-                    onChange={(e) => setBillForm((prev) => ({ ...prev, amount: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Due Day</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={billForm.dueDay}
-                    onChange={(e) => setBillForm((prev) => ({ ...prev, dueDay: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Recurrence</span>
-                  <select
-                    value={billForm.recurrence}
-                    onChange={(e) => setBillForm((prev) => ({ ...prev, recurrence: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                  >
-                    {billRecurrenceOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Notes (optional)</span>
-                  <input
-                    type="text"
-                    value={billForm.notes}
-                    onChange={(e) => setBillForm((prev) => ({ ...prev, notes: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className="mt-2 rounded-xl bg-emerald-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-                >
-                  Save Bill
-                </button>
-              </form>
-            </CollapsibleSection>
-
-            <CollapsibleSection
-              id="log-income"
-              title="Log Income"
-              description="Capture every paycheck or deposit."
-              collapsed={Boolean(collapsedSections['log-income'])}
-              onToggle={toggleSection}
-            >
-              <form className="flex flex-col gap-3" onSubmit={handleIncomeSubmit}>
-                <label className="text-sm">
-                  <span className="text-slate-300">Source</span>
-                  <input
-                    type="text"
-                    value={incomeForm.source}
-                    onChange={(e) => setIncomeForm((prev) => ({ ...prev, source: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Amount</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={incomeForm.amount}
-                    onChange={(e) => setIncomeForm((prev) => ({ ...prev, amount: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Date</span>
-                  <input
-                    type="date"
-                    value={incomeForm.date}
-                    onChange={(e) => setIncomeForm((prev) => ({ ...prev, date: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
-                </label>
-                <label className="text-sm">
-                  <span className="text-slate-300">Recurrence</span>
-                  <select
-                    value={incomeForm.recurrence}
-                    onChange={(e) => setIncomeForm((prev) => ({ ...prev, recurrence: e.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                  >
-                    {incomeRecurrenceOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="submit"
-                  className="mt-2 rounded-xl bg-sky-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
-                >
-                  Add Income
-                </button>
-              </form>
-            </CollapsibleSection>
           </aside>
         </main>
+
+        <div className="mt-6 flex flex-col gap-6">
+          <CollapsibleSection
+            id="add-bill"
+            title="Add Bill"
+            description="Keep recurring expenses organized."
+            collapsed={Boolean(collapsedSections['add-bill'])}
+            onToggle={toggleSection}
+          >
+            <form className="flex flex-col gap-3" onSubmit={handleBillSubmit}>
+              <label className="text-sm">
+                <span className="text-slate-300">Name</span>
+                <input
+                  type="text"
+                  value={billForm.name}
+                  onChange={(e) => setBillForm((prev) => ({ ...prev, name: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Amount</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={billForm.amount}
+                  onChange={(e) => setBillForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Due Day</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  value={billForm.dueDay}
+                  onChange={(e) => setBillForm((prev) => ({ ...prev, dueDay: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Recurrence</span>
+                <select
+                  value={billForm.recurrence}
+                  onChange={(e) => setBillForm((prev) => ({ ...prev, recurrence: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                >
+                  {billRecurrenceOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Notes (optional)</span>
+                <input
+                  type="text"
+                  value={billForm.notes}
+                  onChange={(e) => setBillForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                />
+              </label>
+              <button
+                type="submit"
+                className="mt-2 rounded-xl bg-emerald-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+              >
+                Save Bill
+              </button>
+            </form>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="log-income"
+            title="Log Income"
+            description="Capture every paycheck or deposit."
+            collapsed={Boolean(collapsedSections['log-income'])}
+            onToggle={toggleSection}
+          >
+            <form className="flex flex-col gap-3" onSubmit={handleIncomeSubmit}>
+              <label className="text-sm">
+                <span className="text-slate-300">Source</span>
+                <input
+                  type="text"
+                  value={incomeForm.source}
+                  onChange={(e) => setIncomeForm((prev) => ({ ...prev, source: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Amount</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={incomeForm.amount}
+                  onChange={(e) => setIncomeForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Date</span>
+                <input
+                  type="date"
+                  value={incomeForm.date}
+                  onChange={(e) => setIncomeForm((prev) => ({ ...prev, date: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="text-slate-300">Recurrence</span>
+                <select
+                  value={incomeForm.recurrence}
+                  onChange={(e) => setIncomeForm((prev) => ({ ...prev, recurrence: e.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                >
+                  {incomeRecurrenceOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="submit"
+                className="mt-2 rounded-xl bg-sky-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
+              >
+                Add Income
+              </button>
+            </form>
+          </CollapsibleSection>
+        </div>
       </div>
     </div>
   );
