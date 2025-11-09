@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { FormEvent, ReactNode, SyntheticEvent } from 'react';
 import './App.css';
 
 type Bill = {
@@ -216,8 +216,9 @@ const CollapsibleSection = ({
   onToggle,
 }: CollapsibleSectionProps) => {
   const contentId = `${id}-content`;
+  const sectionClass = containerClassName ?? 'rounded-2xl border border-slate-800 bg-slate-900/80 p-5';
   return (
-    <section className={containerClassName ?? 'rounded-2xl border border-slate-800 bg-slate-900/80 p-5'}>
+    <section className={`w-full max-w-full ${sectionClass}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
@@ -269,6 +270,9 @@ function App() {
   });
 
   const monthKey = getMonthKey(visibleMonth);
+  const openDatePicker = (event: SyntheticEvent<HTMLInputElement>) => {
+    event.currentTarget.showPicker?.();
+  };
   const activePayments = payments[monthKey] ?? {};
   const toggleSection = (id: string) => {
     setCollapsedSections((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -501,7 +505,7 @@ function App() {
           </dl>
         </CollapsibleSection>
 
-        <main className="grid gap-6 lg:grid-cols-3">
+        <main className="grid w-full gap-6 lg:grid-cols-3">
           <CollapsibleSection
             id="calendar"
             title="Bill Calendar"
@@ -510,34 +514,33 @@ function App() {
             collapsed={Boolean(collapsedSections['calendar'])}
             onToggle={toggleSection}
           >
-            <div className="mt-2 overflow-x-auto">
-              <div className="min-w-[640px] space-y-2 pr-2 lg:min-w-0">
-                <div className="grid grid-cols-7 gap-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  {dayName.map((day) => (
-                    <div key={day}>{day}</div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-7 gap-2 sm:gap-3">
-                  {calendarCells.map((cell) => (
-                    <div
-                      key={cell.key}
-                      className={`min-h-[100px] overflow-hidden rounded-xl border p-2 text-xs sm:min-h-[120px] sm:text-sm sm:p-3 ${
-                        cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600'
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-1 text-xs font-semibold">
-                        <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
-                        {cell.bills.length > 0 && (
-                          <span className="ml-auto truncate text-[11px] text-slate-400">
-                            {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
-                          </span>
+            <div className="mt-2 space-y-2">
+              <div className="grid w-full grid-cols-7 gap-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400 sm:gap-2 sm:text-xs">
+                {dayName.map((day) => (
+                  <div key={day}>{day}</div>
+                ))}
+              </div>
+              <div className="grid w-full grid-cols-7 gap-1 sm:gap-2 lg:gap-3">
+                {calendarCells.map((cell) => (
+                  <div
+                    key={cell.key}
+                    className={`min-h-[88px] overflow-hidden rounded-xl border p-1 text-[11px] sm:min-h-[120px] sm:p-3 sm:text-sm ${
+                      cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600'
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold sm:text-xs">
+                      <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
+                      {cell.bills.length > 0 && (
+                        <span className="ml-auto truncate text-[11px] text-slate-400">
+                          {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
+                        </span>
                         )}
                       </div>
                       <div className="mt-2 space-y-2">
                         {cell.bills.map((bill) => {
                           const paid = Boolean(activePayments[bill.id]);
                           return (
-                            <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-xs">
+                            <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-[11px] sm:text-xs">
                               <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
                                 <span className="sr-only sm:hidden">{bill.name}</span>
                                 <span
@@ -580,10 +583,9 @@ function App() {
                   ))}
                 </div>
               </div>
-            </div>
-          </CollapsibleSection>
+            </CollapsibleSection>
 
-          <aside className="flex flex-col gap-5 lg:col-span-1">
+          <aside className="flex w-full flex-col gap-5 lg:col-span-1">
             <CollapsibleSection
               id="weekly"
               title="Weekly Totals"
@@ -622,18 +624,35 @@ function App() {
                       {isOpen && (
                         <div className="mt-3 space-y-2 rounded-lg border border-slate-800/80 bg-slate-950/30 p-3 text-xs sm:text-sm">
                           {week.bills.length > 0 ? (
-                            week.bills.map(({ bill, date }) => (
-                              <div
-                                key={`${week.label}-${bill.id}-${date.toISOString()}`}
-                                className="flex items-center justify-between gap-3 text-slate-200"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate font-semibold text-slate-100">{bill.name}</p>
-                                  <p className="text-[11px] text-slate-500">{date.toLocaleDateString()}</p>
-                                </div>
-                                <span className="shrink-0 font-semibold">{currency(bill.amount)}</span>
-                              </div>
-                            ))
+                            week.bills.map(({ bill, date }) => {
+                              const paid = Boolean(activePayments[bill.id]);
+                              return (
+                                <button
+                                  key={`${week.label}-${bill.id}-${date.toISOString()}`}
+                                  type="button"
+                                  onClick={() => togglePaid(bill.id)}
+                                  aria-pressed={paid}
+                                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left ${
+                                    paid
+                                      ? 'border-emerald-700/50 bg-emerald-500/10 text-emerald-200'
+                                      : 'border-slate-800 bg-slate-950/50 text-slate-200 hover:border-slate-600'
+                                  }`}
+                                >
+                                  <div className="min-w-0">
+                                    <p className={`truncate font-semibold ${paid ? 'line-through opacity-80' : 'text-slate-100'}`}>
+                                      {bill.name}
+                                    </p>
+                                    <p className="text-[11px] text-slate-400">{date.toLocaleDateString()}</p>
+                                  </div>
+                                  <div className="flex shrink-0 flex-col items-end">
+                                    <span className="font-semibold">{currency(bill.amount)}</span>
+                                    <span className={`text-[11px] uppercase tracking-wide ${paid ? 'text-emerald-300' : 'text-amber-300'}`}>
+                                      {paid ? 'Paid' : 'Tap to mark paid'}
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            })
                           ) : (
                             <p className="text-xs text-slate-500">No bills scheduled this week.</p>
                           )}
@@ -690,7 +709,7 @@ function App() {
           </aside>
         </main>
 
-        <div className="mt-6 flex flex-col gap-6">
+        <div className="mt-6 flex w-full flex-col gap-6">
           <CollapsibleSection
             id="add-bill"
             title="Add Expense"
@@ -722,20 +741,22 @@ function App() {
               </label>
                 <label className="text-sm">
                   <span className="text-slate-300">Date</span>
-                  <input
-                    type="date"
-                    value={billForm.date}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setBillForm((prev) => ({
-                        ...prev,
-                        date: value,
-                        dueDay: value ? String(getDayFromISODate(value)) : prev.dueDay,
-                      }));
-                    }}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
-                    required
-                  />
+                <input
+                  type="date"
+                  value={billForm.date}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setBillForm((prev) => ({
+                      ...prev,
+                      date: value,
+                      dueDay: value ? String(getDayFromISODate(value)) : prev.dueDay,
+                    }));
+                  }}
+                  onClick={openDatePicker}
+                  onFocus={openDatePicker}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
+                  required
+                />
                 </label>
               <label className="text-sm">
                 <span className="text-slate-300">Recurrence</span>
@@ -804,6 +825,8 @@ function App() {
                   type="date"
                   value={incomeForm.date}
                   onChange={(e) => setIncomeForm((prev) => ({ ...prev, date: e.target.value }))}
+                  onClick={openDatePicker}
+                  onFocus={openDatePicker}
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
                   required
                 />
