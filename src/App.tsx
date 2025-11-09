@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode, SyntheticEvent } from 'react';
 import './App.css';
 
@@ -10,6 +10,7 @@ type Bill = {
   recurrence: number; // months between occurrences
   startMonth: string; // YYYY-MM
   notes?: string;
+  endMonth?: string;
 };
 
 type IncomeRecurrence = 'none' | 'biweekly' | 'monthly';
@@ -24,6 +25,9 @@ type IncomeEntry = {
 
 type PaymentState = Record<string, Record<string, boolean>>; // monthKey -> billId -> paid
 type CollapsibleSectionConfig = Record<string, boolean>;
+type BillInstanceOverride = Pick<Bill, 'name' | 'amount' | 'dueDay' | 'notes'>;
+type BillOverrides = Record<string, Record<string, BillInstanceOverride>>;
+type EditingBillContext = { billId: string; monthKey: string };
 
 type CollapsibleSectionProps = {
   id: string;
@@ -84,6 +88,19 @@ const getDayFromISODate = (iso: string) => {
   return Number.isNaN(day) ? 1 : day;
 };
 
+const getDateFromMonthKey = (key: string) => {
+  if (!isValidMonthKey(key)) return new Date();
+  const [year, month] = key.split('-').map(Number);
+  return new Date(year, month - 1, 1);
+};
+
+const getPreviousMonthKey = (monthKey: string) => {
+  if (!isValidMonthKey(monthKey)) return null;
+  const date = getDateFromMonthKey(monthKey);
+  date.setMonth(date.getMonth() - 1);
+  return getMonthKey(date);
+};
+
 const CURRENT_MONTH_KEY = getMonthKey(new Date());
 
 const DEFAULT_BILLS: Bill[] = [
@@ -139,6 +156,7 @@ const monthsBetween = (startKey: string, target: Date) => {
 const isBillDueInMonth = (bill: Bill, month: Date) => {
   const diff = monthsBetween(bill.startMonth, month);
   if (diff < 0) return false;
+  if (bill.endMonth && monthsBetween(bill.endMonth, month) > 0) return false;
   if (bill.recurrence <= 0) {
     return diff === 0;
   }
@@ -250,8 +268,11 @@ function App() {
   const [bills, setBills] = usePersistentState<Bill[]>('billflow:bills', DEFAULT_BILLS);
   const [incomes, setIncomes] = usePersistentState<IncomeEntry[]>('billflow:income', DEFAULT_INCOME);
   const [payments, setPayments] = usePersistentState<PaymentState>('billflow:payments', {});
+  const [billOverrides, setBillOverrides] = usePersistentState<BillOverrides>('billflow:bill-overrides', {});
   const [collapsedSections, setCollapsedSections] = usePersistentState<CollapsibleSectionConfig>('billflow:sections', {});
   const [openWeekLabel, setOpenWeekLabel] = useState<string | null>(null);
+  const [editingBill, setEditingBill] = useState<EditingBillContext | null>(null);
+  const editFormRef = useRef<HTMLDivElement | null>(null);
 
   const billFormDefaults = {
     name: '',
@@ -273,6 +294,34 @@ function App() {
   const openDatePicker = (event: SyntheticEvent<HTMLInputElement>) => {
     event.currentTarget.showPicker?.();
   };
+
+  const setOverrideForBill = (targetMonthKey: string, billId: string, override?: BillInstanceOverride) => {
+    setBillOverrides((prev) => {
+      const next = { ...prev };
+      const monthOverrides = { ...(next[targetMonthKey] ?? {}) };
+      if (override) {
+        monthOverrides[billId] = override;
+        next[targetMonthKey] = monthOverrides;
+        return next;
+      }
+      if (!monthOverrides[billId]) {
+        return prev;
+      }
+      delete monthOverrides[billId];
+      if (Object.keys(monthOverrides).length === 0) {
+        delete next[targetMonthKey];
+      } else {
+        next[targetMonthKey] = monthOverrides;
+      }
+      return next;
+    });
+  };
+
+  const cancelEditingBill = () => {
+    setEditingBill(null);
+    setBillForm(billFormDefaults);
+  };
+
   const activePayments = payments[monthKey] ?? {};
   const toggleSection = (id: string) => {
     setCollapsedSections((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -290,6 +339,7 @@ function App() {
       ...bill,
       recurrence: bill.recurrence ?? 1,
       startMonth: isValidMonthKey(bill.startMonth) ? bill.startMonth : CURRENT_MONTH_KEY,
+      endMonth: isValidMonthKey(bill.endMonth) ? bill.endMonth : undefined,
     }));
   }, [bills]);
 
@@ -298,15 +348,25 @@ function App() {
     [normalizedBills, visibleMonth]
   );
 
+  const overridesForVisibleMonth = billOverrides[monthKey] ?? {};
+  const visibleBills = useMemo(
+    () =>
+      dueBills.map((bill) => {
+        const override = overridesForVisibleMonth[bill.id];
+        return override ? { ...bill, ...override } : bill;
+      }),
+    [dueBills, overridesForVisibleMonth]
+  );
+
   const billsByDay = useMemo(() => {
     const map: Record<number, Bill[]> = {};
     const maxDay = daysInMonth(visibleMonth);
-    dueBills.forEach((bill) => {
+    visibleBills.forEach((bill) => {
       const day = Math.min(bill.dueDay, maxDay);
       map[day] = map[day] ? [...map[day], bill] : [bill];
     });
     return map;
-  }, [dueBills, visibleMonth]);
+  }, [visibleBills, visibleMonth]);
 
   const calendarCells = useMemo(() => {
     const startOfMonth = new Date(visibleMonth);
@@ -330,13 +390,13 @@ function App() {
     });
   }, [visibleMonth, billsByDay]);
 
-  const totalDue = useMemo(() => dueBills.reduce((sum, bill) => sum + bill.amount, 0), [dueBills]);
+  const totalDue = useMemo(() => visibleBills.reduce((sum, bill) => sum + bill.amount, 0), [visibleBills]);
   const paidSoFar = useMemo(
     () =>
-      dueBills.reduce((sum, bill) => {
+      visibleBills.reduce((sum, bill) => {
         return activePayments[bill.id] ? sum + bill.amount : sum;
       }, 0),
-    [dueBills, activePayments]
+    [visibleBills, activePayments]
   );
   const remainingDue = totalDue - paidSoFar;
 
@@ -396,6 +456,108 @@ function App() {
     setBillForm(billFormDefaults);
   };
 
+  const extractBillFormValues = () => {
+    const name = billForm.name.trim();
+    const amountValue = Number(billForm.amount);
+    if (!name || amountValue <= 0 || !billForm.date) return null;
+    const dueDay = getDayFromISODate(billForm.date);
+    const notes = billForm.notes.trim();
+    return {
+      name,
+      amount: normalizeAmount(amountValue),
+      dueDay,
+      notes: notes ? notes : undefined,
+    };
+  };
+
+  const scrollToEditForm = () => {
+    editFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const startEditingExistingBill = (bill: Bill, occurrenceDate: Date) => {
+    setEditingBill({ billId: bill.id, monthKey: getMonthKey(occurrenceDate) });
+    setBillForm({
+      name: bill.name,
+      amount: String(bill.amount),
+      dueDay: String(bill.dueDay),
+      recurrence: String(bill.recurrence),
+      notes: bill.notes ?? '',
+      date: occurrenceDate.toISOString().slice(0, 10),
+    });
+    setCollapsedSections((prev) => ({ ...prev, 'add-bill': false }));
+    scrollToEditForm();
+  };
+
+  const handleUpdateBillInstance = () => {
+    if (!editingBill) return;
+    const values = extractBillFormValues();
+    if (!values) return;
+    setOverrideForBill(editingBill.monthKey, editingBill.billId, values);
+    cancelEditingBill();
+  };
+
+  const handleUpdateFutureInstances = () => {
+    if (!editingBill) return;
+    const values = extractBillFormValues();
+    if (!values) return;
+    const recurrenceValue = Number(billForm.recurrence ?? '1');
+    if (Number.isNaN(recurrenceValue) || recurrenceValue < 0) return;
+    const editingMonthDate = getDateFromMonthKey(editingBill.monthKey);
+    let createdBillId: string | null = null;
+    setBills((prev) => {
+      const index = prev.findIndex((bill) => bill.id === editingBill.billId);
+      if (index === -1) return prev;
+      const currentBill = prev[index];
+      const nextBills = [...prev];
+      const updatedBase = {
+        ...currentBill,
+        name: values.name,
+        amount: values.amount,
+        dueDay: values.dueDay,
+        recurrence: recurrenceValue,
+        notes: values.notes,
+      };
+      if (currentBill.recurrence <= 0 || monthsBetween(currentBill.startMonth, editingMonthDate) === 0) {
+        nextBills[index] = { ...updatedBase };
+        return nextBills;
+      }
+      const previousMonthKey = getPreviousMonthKey(editingBill.monthKey);
+      if (!previousMonthKey) {
+        nextBills[index] = { ...updatedBase };
+        return nextBills;
+      }
+      const safePreviousMonthKey: string = previousMonthKey;
+      nextBills[index] = { ...currentBill, endMonth: safePreviousMonthKey };
+      const futureBill: Bill = {
+        ...currentBill,
+        id: makeId(),
+        startMonth: editingBill.monthKey,
+        endMonth: currentBill.endMonth,
+        recurrence: recurrenceValue,
+        name: values.name,
+        amount: values.amount,
+        dueDay: values.dueDay,
+        notes: values.notes,
+      };
+      createdBillId = futureBill.id;
+      nextBills.push(futureBill);
+      return nextBills;
+    });
+    const newBillId = createdBillId;
+    setOverrideForBill(editingBill.monthKey, editingBill.billId);
+    if (newBillId) {
+      setPayments((prev) => {
+        const monthPayments = prev[editingBill.monthKey];
+        if (!monthPayments || !monthPayments[editingBill.billId]) return prev;
+        const nextMonthPayments = { ...monthPayments };
+        nextMonthPayments[newBillId] = nextMonthPayments[editingBill.billId];
+        delete nextMonthPayments[editingBill.billId];
+        return { ...prev, [editingBill.monthKey]: nextMonthPayments };
+      });
+    }
+    cancelEditingBill();
+  };
+
   const handleIncomeSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const source = incomeForm.source.trim();
@@ -438,6 +600,9 @@ function App() {
   const deleteBill = (bill: Bill) => {
     if (!confirmDelete(`bill "${bill.name}"`)) return;
     const billId = bill.id;
+    if (editingBill?.billId === billId) {
+      cancelEditingBill();
+    }
     setBills((prev) => prev.filter((entry) => entry.id !== billId));
     setPayments((prev) => {
       const next = { ...prev };
@@ -451,6 +616,21 @@ function App() {
       });
       return changed ? next : prev;
     });
+    setBillOverrides((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      Object.keys(next).forEach((key) => {
+        if (next[key]?.[billId]) {
+          next[key] = { ...next[key] };
+          delete next[key][billId];
+          if (Object.keys(next[key]).length === 0) {
+            delete next[key];
+          }
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
   };
 
   const monthLabel = visibleMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -459,6 +639,15 @@ function App() {
     () => [...expandedIncomes].sort((a, b) => a.date.localeCompare(b.date)),
     [expandedIncomes]
   );
+
+  const isEditingExpense = Boolean(editingBill);
+  const editingMonthLabel = editingBill
+    ? getDateFromMonthKey(editingBill.monthKey).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+    : '';
+  const editingInstanceLabel =
+    isEditingExpense && billForm.date
+      ? new Date(billForm.date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
+      : '';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -627,30 +816,39 @@ function App() {
                             week.bills.map(({ bill, date }) => {
                               const paid = Boolean(activePayments[bill.id]);
                               return (
-                                <button
-                                  key={`${week.label}-${bill.id}-${date.toISOString()}`}
-                                  type="button"
-                                  onClick={() => togglePaid(bill.id)}
-                                  aria-pressed={paid}
-                                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left ${
-                                    paid
-                                      ? 'border-emerald-700/50 bg-emerald-500/10 text-emerald-200'
-                                      : 'border-slate-800 bg-slate-950/50 text-slate-200 hover:border-slate-600'
-                                  }`}
-                                >
-                                  <div className="min-w-0">
-                                    <p className={`truncate font-semibold ${paid ? 'line-through opacity-80' : 'text-slate-100'}`}>
-                                      {bill.name}
-                                    </p>
-                                    <p className="text-[11px] text-slate-400">{date.toLocaleDateString()}</p>
-                                  </div>
-                                  <div className="flex shrink-0 flex-col items-end">
-                                    <span className="font-semibold">{currency(bill.amount)}</span>
-                                    <span className={`text-[11px] uppercase tracking-wide ${paid ? 'text-emerald-300' : 'text-amber-300'}`}>
-                                      {paid ? 'Paid' : 'Tap to mark paid'}
-                                    </span>
-                                  </div>
-                                </button>
+                                <div key={`${week.label}-${bill.id}-${date.toISOString()}`} className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => togglePaid(bill.id)}
+                                    aria-pressed={paid}
+                                    className={`flex w-full flex-1 items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left ${
+                                      paid
+                                        ? 'border-emerald-700/50 bg-emerald-500/10 text-emerald-200'
+                                        : 'border-slate-800 bg-slate-950/50 text-slate-200 hover:border-slate-600'
+                                    }`}
+                                  >
+                                    <div className="min-w-0">
+                                      <p className={`truncate font-semibold ${paid ? 'line-through opacity-80' : 'text-slate-100'}`}>
+                                        {bill.name}
+                                      </p>
+                                      <p className="text-[11px] text-slate-400">{date.toLocaleDateString()}</p>
+                                    </div>
+                                    <div className="flex shrink-0 flex-col items-end">
+                                      <span className="font-semibold">{currency(bill.amount)}</span>
+                                      <span className={`text-[11px] uppercase tracking-wide ${paid ? 'text-emerald-300' : 'text-amber-300'}`}>
+                                        {paid ? 'Paid' : 'Tap to mark paid'}
+                                      </span>
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditingExistingBill(bill, date)}
+                                    className="shrink-0 rounded-lg border border-slate-700/70 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500 hover:text-slate-100"
+                                    aria-label={`Edit ${bill.name} for ${date.toLocaleDateString()}`}
+                                  >
+                                    Edit
+                                  </button>
+                                </div>
                               );
                             })
                           ) : (
@@ -710,14 +908,29 @@ function App() {
         </main>
 
         <div className="mt-6 flex w-full flex-col gap-6">
-          <CollapsibleSection
-            id="add-bill"
-            title="Add Expense"
-            description="Keep expenses organized."
-            collapsed={Boolean(collapsedSections['add-bill'])}
-            onToggle={toggleSection}
-          >
-            <form className="flex flex-col gap-3" onSubmit={handleBillSubmit}>
+          <div ref={editFormRef}>
+            <CollapsibleSection
+              id="add-bill"
+              title="Add Expense"
+              description="Keep expenses organized."
+              collapsed={Boolean(collapsedSections['add-bill'])}
+              onToggle={toggleSection}
+            >
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(event) => {
+                if (isEditingExpense) {
+                  event.preventDefault();
+                  return;
+                }
+                handleBillSubmit(event);
+              }}
+            >
+              {isEditingExpense && (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                  Editing expense for {editingInstanceLabel || editingMonthLabel}. Choose how you want to apply the changes below.
+                </div>
+              )}
               <label className="text-sm">
                 <span className="text-slate-300">Name</span>
                 <input
@@ -781,14 +994,41 @@ function App() {
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none"
                 />
               </label>
+              {isEditingExpense ? (
+                <div className="mt-2 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={handleUpdateBillInstance}
+                    className="flex-1 rounded-xl border border-slate-600 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-400"
+                  >
+                    Update This Instance
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUpdateFutureInstances}
+                    className="flex-1 rounded-xl bg-emerald-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+                  >
+                    Update Future Instances
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditingBill}
+                    className="flex-1 rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-500"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="submit"
                   className="mt-2 rounded-xl bg-emerald-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
                 >
                   Save Expense
                 </button>
+              )}
             </form>
-          </CollapsibleSection>
+            </CollapsibleSection>
+          </div>
 
           <CollapsibleSection
             id="log-income"
