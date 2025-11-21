@@ -40,10 +40,17 @@ type CollapsibleSectionProps = {
   onToggle: (id: string) => void;
 };
 
+const formatISODate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 function buildISOForCurrentMonth(day: number): string {
   const now = new Date();
   const date = new Date(now.getFullYear(), now.getMonth(), day);
-  return date.toISOString().slice(0, 10);
+  return formatISODate(date);
 }
 
 const DEFAULT_INCOME: IncomeEntry[] = [
@@ -177,15 +184,16 @@ const startOfDayValue = (date: Date) => new Date(date.getFullYear(), date.getMon
 const expandIncomeEntry = (entry: IncomeEntry, month: Date): IncomeOccurrence[] => {
   const recurrence = entry.recurrence ?? 'none';
   const occurrences: IncomeOccurrence[] = [];
-  const baseDate = new Date(entry.date);
+  const baseDate = parseISODate(entry.date);
   const monthStart = startOfMonth(month);
   const monthEnd = endOfMonth(month);
 
   const pushOccurrence = (date: Date) => {
+    const dateKey = formatISODate(date);
     occurrences.push({
-      occurrenceId: `${entry.id}-${date.toISOString().slice(0, 10)}`,
+      occurrenceId: `${entry.id}-${dateKey}`,
       entry,
-      date: date.toISOString().slice(0, 10),
+      date: dateKey,
       amount: entry.amount,
       source: entry.source,
     });
@@ -271,6 +279,7 @@ const CollapsibleSection = ({
 
 function App() {
   const today = new Date();
+  const todayISO = formatISODate(today);
   const [visibleMonth, setVisibleMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [bills, setBills] = usePersistentState<Bill[]>('billflow:bills', DEFAULT_BILLS);
   const [incomes, setIncomes] = usePersistentState<IncomeEntry[]>('billflow:income', DEFAULT_INCOME);
@@ -287,13 +296,13 @@ function App() {
     dueDay: String(today.getDate()),
     recurrence: '1',
     notes: '',
-    date: today.toISOString().slice(0, 10),
+    date: todayISO,
   };
   const [billForm, setBillForm] = useState(billFormDefaults);
   const [incomeForm, setIncomeForm] = useState({
     source: '',
     amount: '',
-    date: today.toISOString().slice(0, 10),
+    date: todayISO,
     recurrence: 'none',
   });
 
@@ -398,6 +407,7 @@ function App() {
     const startOffset = startOfMonth.getDay();
     const calendarStart = new Date(visibleMonth);
     calendarStart.setDate(1 - startOffset);
+    const todayKey = formatISODate(today);
 
     return Array.from({ length: 42 }, (_, idx) => {
       const date = new Date(calendarStart);
@@ -406,6 +416,7 @@ function App() {
       const day = date.getDate();
       const billsForDay = inCurrentMonth ? billsByDay[day] ?? [] : [];
       const incomesForDay = inCurrentMonth ? incomesByDay[day] ?? [] : [];
+      const isToday = formatISODate(date) === todayKey;
       return {
         key: date.toISOString(),
         date,
@@ -414,9 +425,10 @@ function App() {
         bills: billsForDay,
         incomes: incomesForDay,
         hasIncome: incomesForDay.length > 0,
+        isToday,
       };
     });
-  }, [visibleMonth, billsByDay, incomesByDay]);
+  }, [visibleMonth, billsByDay, incomesByDay, today]);
 
   const totalDue = useMemo(() => visibleBills.reduce((sum, bill) => sum + bill.amount, 0), [visibleBills]);
   const paidSoFar = useMemo(
@@ -506,7 +518,7 @@ function App() {
       dueDay: String(bill.dueDay),
       recurrence: String(bill.recurrence),
       notes: bill.notes ?? '',
-      date: occurrenceDate.toISOString().slice(0, 10),
+      date: formatISODate(occurrenceDate),
     });
     setCollapsedSections((prev) => ({ ...prev, 'add-bill': false }));
     scrollToEditForm();
@@ -673,43 +685,85 @@ function App() {
       .filter((occurrence) => occurrence.time >= referenceTime)
       .sort((a, b) => a.time - b.time);
 
-    const nextIncome = sortedIncomes[0];
-    if (!nextIncome) return null;
+    if (sortedIncomes.length === 0) return null;
 
-    const incomeDate = parseISODate(nextIncome.date);
-    const incomeTime = startOfDayValue(incomeDate);
-    const monthsUntilIncome: Date[] = [];
-    const cursor = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
-    let safety = 0;
-
-    while (cursor.getTime() <= incomeTime && safety < 12) {
-      monthsUntilIncome.push(new Date(cursor));
-      cursor.setMonth(cursor.getMonth() + 1);
-      safety += 1;
-    }
-
-    const billEntries = monthsUntilIncome.flatMap((month) => {
+    const billEntries = monthsToScan.flatMap((month) => {
       const billsForMonth = getBillsForMonth(month);
       const monthKeyForMonth = getMonthKey(month);
       const monthPayments = payments[monthKeyForMonth] ?? {};
       const maxDay = daysInMonth(month);
       return billsForMonth.map((bill) => {
         const dueDate = new Date(month.getFullYear(), month.getMonth(), Math.min(bill.dueDay, maxDay));
-        return { bill, dueDate, paid: Boolean(monthPayments[bill.id]) };
+        return { bill, dueDate, paid: Boolean(monthPayments[bill.id]), time: startOfDayValue(dueDate) };
       });
     });
 
-    const dueBeforeIncome = billEntries.filter((entry) => startOfDayValue(entry.dueDate) < incomeTime);
-    const totalDue = dueBeforeIncome.reduce((sum, entry) => sum + entry.bill.amount, 0);
-    const remainingDue = dueBeforeIncome.reduce((sum, entry) => (entry.paid ? sum : sum + entry.bill.amount), 0);
-    const unpaidCount = dueBeforeIncome.filter((entry) => !entry.paid).length;
+    const collectIncomeGroup = (startIndex: number) => {
+      const groupTime = sortedIncomes[startIndex].time;
+      const groupDate = parseISODate(sortedIncomes[startIndex].date);
+      const incomesForGroup: (typeof sortedIncomes)[number][] = [];
+      let index = startIndex;
+      while (index < sortedIncomes.length && sortedIncomes[index].time === groupTime) {
+        incomesForGroup.push(sortedIncomes[index]);
+        index += 1;
+      }
+      const amount = incomesForGroup.reduce((sum, occurrence) => sum + occurrence.amount, 0);
+      return {
+        nextIndex: index,
+        group: {
+          time: groupTime,
+          date: groupDate,
+          incomes: incomesForGroup,
+          amount,
+        },
+      };
+    };
+
+    const includedGroups: {
+      time: number;
+      date: Date;
+      incomes: (typeof sortedIncomes)[number][];
+      amount: number;
+    }[] = [];
+
+    const firstGroupResult = collectIncomeGroup(0);
+    includedGroups.push(firstGroupResult.group);
+    let nextIndex = firstGroupResult.nextIndex;
+    let lastIncludedTime = firstGroupResult.group.time;
+
+    while (nextIndex < sortedIncomes.length) {
+      const candidateTime = sortedIncomes[nextIndex].time;
+      const hasBlockingBill = billEntries.some((entry) => entry.time > lastIncludedTime && entry.time < candidateTime);
+      if (hasBlockingBill) break;
+      const nextGroupResult = collectIncomeGroup(nextIndex);
+      includedGroups.push(nextGroupResult.group);
+      lastIncludedTime = nextGroupResult.group.time;
+      nextIndex = nextGroupResult.nextIndex;
+    }
+
+    const allIncludedIncomes = includedGroups.flatMap((group) => group.incomes);
+    const combinedIncomeAmount = allIncludedIncomes.reduce((sum, income) => sum + income.amount, 0);
+    const sources = Array.from(new Set(allIncludedIncomes.map((income) => income.source)));
+    const coverageStart = includedGroups[0].date;
+    const coverageEnd = includedGroups[includedGroups.length - 1].date;
+
+    const dueBeforeFirstIncome = billEntries.filter((entry) => entry.time < includedGroups[0].time);
+    const totalDue = dueBeforeFirstIncome.reduce((sum, entry) => sum + entry.bill.amount, 0);
+    const remainingDue = dueBeforeFirstIncome.reduce((sum, entry) => (entry.paid ? sum : sum + entry.bill.amount), 0);
+    const unpaidCount = dueBeforeFirstIncome.filter((entry) => !entry.paid).length;
 
     return {
-      nextIncome,
+      groups: includedGroups,
+      incomeCount: allIncludedIncomes.length,
+      combinedIncomeAmount,
+      sources,
+      coverageStart,
+      coverageEnd,
       totalDue,
       remainingDue,
-      billCount: dueBeforeIncome.length,
+      billCount: dueBeforeFirstIncome.length,
       unpaidCount,
+      primaryIncome: includedGroups[0].incomes[0],
     };
   }, [getBillsForMonth, incomes, payments, referenceDate, visibleMonth]);
 
@@ -719,7 +773,7 @@ function App() {
     : '';
   const editingInstanceLabel =
     isEditingExpense && billForm.date
-      ? new Date(billForm.date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
+      ? parseISODate(billForm.date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
       : '';
 
   return (
@@ -783,72 +837,76 @@ function App() {
                 ))}
               </div>
               <div className="grid w-full grid-cols-7 gap-1 sm:gap-2 lg:gap-3">
-                {calendarCells.map((cell) => (
-                  <div
-                    key={cell.key}
-                    className={`relative min-h-[88px] overflow-hidden rounded-xl border p-1 text-[11px] sm:min-h-[120px] sm:p-3 sm:text-sm ${
-                      cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600'
-                    }`}
-                  >
-                    <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold sm:text-xs">
-                      <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
-                      {cell.bills.length > 0 && (
-                        <span className="ml-auto truncate text-[11px] text-slate-400">
-                          {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
-                        </span>
+                {calendarCells.map((cell) => {
+                  const cellClasses = [
+                    'relative min-h-[88px] overflow-hidden rounded-xl border p-1 text-[11px] sm:min-h-[120px] sm:p-3 sm:text-sm',
+                    cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600',
+                  ];
+                  if (cell.isToday && cell.inCurrentMonth) {
+                    cellClasses.push('ring-2 ring-emerald-400/60');
+                  }
+                  return (
+                    <div key={cell.key} className={cellClasses.join(' ')}>
+                      <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold sm:text-xs">
+                        <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
+                        {cell.bills.length > 0 && (
+                          <span className="ml-auto truncate text-[11px] text-slate-400">
+                            {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
+                          </span>
+                        )}
+                      </div>
+                      {cell.hasIncome && (
+                        <span
+                          className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-400"
+                          aria-label="Income scheduled"
+                        />
                       )}
-                    </div>
-                    {cell.hasIncome && (
-                      <span
-                        className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-400"
-                        aria-label="Income scheduled"
-                      />
-                    )}
-                    <div className="mt-2 space-y-2">
-                      {cell.bills.map((bill) => {
-                        const paid = Boolean(activePayments[bill.id]);
-                        return (
-                          <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-[11px] sm:text-xs">
-                            <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
-                              <span className="sr-only sm:hidden">{bill.name}</span>
-                              <span
-                                className={`${
-                                  paid ? 'text-slate-500 line-through' : 'text-slate-100'
-                                } hidden min-w-0 truncate sm:inline`}
-                              >
-                                {bill.name}
-                              </span>
-                              <span className={`${paid ? 'text-emerald-400' : 'text-slate-100'} shrink-0`}>
-                                {currency(bill.amount)}
-                              </span>
+                      <div className="mt-2 space-y-2">
+                        {cell.bills.map((bill) => {
+                          const paid = Boolean(activePayments[bill.id]);
+                          return (
+                            <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-[11px] sm:text-xs">
+                              <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
+                                <span className="sr-only sm:hidden">{bill.name}</span>
+                                <span
+                                  className={`${
+                                    paid ? 'text-slate-500 line-through' : 'text-slate-100'
+                                  } hidden min-w-0 truncate sm:inline`}
+                                >
+                                  {bill.name}
+                                </span>
+                                <span className={`${paid ? 'text-emerald-400' : 'text-slate-100'} shrink-0`}>
+                                  {currency(bill.amount)}
+                                </span>
+                              </div>
+                              {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
+                              <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                                <button
+                                  onClick={() => togglePaid(bill.id)}
+                                  className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
+                                    paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
+                                  }`}
+                                >
+                                  {paid ? 'Paid' : 'Mark Paid'}
+                                </button>
+                                <button
+                                  onClick={() => deleteBill(bill)}
+                                  className="text-slate-500 transition hover:text-rose-400"
+                                  aria-label={`Delete ${bill.name}`}
+                                >
+                                  ✕
+                                </button>
+                              </div>
                             </div>
-                            {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
-                            <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
-                              <button
-                                onClick={() => togglePaid(bill.id)}
-                                className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
-                                  paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
-                                }`}
-                              >
-                                {paid ? 'Paid' : 'Mark Paid'}
-                              </button>
-                              <button
-                                onClick={() => deleteBill(bill)}
-                                className="text-slate-500 transition hover:text-rose-400"
-                                aria-label={`Delete ${bill.name}`}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {cell.inCurrentMonth && cell.bills.length === 0 && (
-                        <p className="text-[11px] text-slate-500">No bills</p>
-                      )}
+                          );
+                        })}
+                        {cell.inCurrentMonth && cell.bills.length === 0 && (
+                          <p className="text-[11px] text-slate-500">No bills</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </CollapsibleSection>
@@ -866,16 +924,33 @@ function App() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs uppercase tracking-wide text-slate-500">Next income</p>
-                      <p className="text-base font-semibold text-slate-100">{nextIncomeSummary.nextIncome.source}</p>
+                      <p className="text-base font-semibold text-slate-100">
+                        {nextIncomeSummary.incomeCount > 1
+                          ? `${nextIncomeSummary.incomeCount} incomes`
+                          : nextIncomeSummary.primaryIncome.source}
+                      </p>
                       <p className="text-xs text-slate-400">
-                        {parseISODate(nextIncomeSummary.nextIncome.date).toLocaleDateString()}
+                        {nextIncomeSummary.coverageStart.getTime() === nextIncomeSummary.coverageEnd.getTime()
+                          ? nextIncomeSummary.coverageStart.toLocaleDateString()
+                          : `${nextIncomeSummary.coverageStart.toLocaleDateString()} – ${nextIncomeSummary.coverageEnd.toLocaleDateString()}`}
                       </p>
                       <p className="text-[11px] uppercase tracking-wide text-slate-500">
-                        {incomeRecurrenceLabels[nextIncomeSummary.nextIncome.entry.recurrence ?? 'none']}
+                        {nextIncomeSummary.incomeCount === 1
+                          ? incomeRecurrenceLabels[nextIncomeSummary.primaryIncome.entry.recurrence ?? 'none']
+                          : nextIncomeSummary.groups.length === 1
+                            ? 'Multiple entries same day'
+                            : `${nextIncomeSummary.groups.length} income dates`}
                       </p>
+                      {nextIncomeSummary.sources.length > 0 && (
+                        <p className="text-[11px] text-slate-500">
+                          {nextIncomeSummary.sources.join(', ')}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-semibold text-emerald-300">{currency(nextIncomeSummary.nextIncome.amount)}</p>
+                      <p className="text-sm font-semibold text-emerald-300">
+                        {currency(nextIncomeSummary.combinedIncomeAmount)}
+                      </p>
                       <p className="text-[11px] text-slate-500">Scheduled</p>
                     </div>
                   </div>
@@ -899,6 +974,16 @@ function App() {
                       </span>
                     </div>
                   </div>
+                  {nextIncomeSummary.groups.length > 1 && (
+                    <ul className="space-y-1 rounded-lg border border-slate-800/60 bg-slate-950/40 p-2 text-[11px] text-slate-400">
+                      {nextIncomeSummary.groups.map((group) => (
+                        <li key={`next-income-${group.date.toISOString()}`} className="flex items-center justify-between">
+                          <span>{group.date.toLocaleDateString()}</span>
+                          <span className="text-slate-200">{currency(group.amount)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ) : (
                 <p className="text-sm text-slate-500">Log an upcoming income to see which bills come before it.</p>
@@ -1011,7 +1096,7 @@ function App() {
                       >
                         <div>
                           <p className="font-semibold text-slate-100">{income.source}</p>
-                          <p className="text-xs text-slate-400">{new Date(income.date).toLocaleDateString()}</p>
+                          <p className="text-xs text-slate-400">{parseISODate(income.date).toLocaleDateString()}</p>
                           <p className="text-[11px] uppercase tracking-wide text-slate-500">
                             {incomeRecurrenceLabels[recurrence]}
                           </p>
