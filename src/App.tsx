@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode, SyntheticEvent } from 'react';
 import './App.css';
 
@@ -88,6 +88,12 @@ const getDayFromISODate = (iso: string) => {
   return Number.isNaN(day) ? 1 : day;
 };
 
+const parseISODate = (iso: string) => {
+  const [year, month, day] = iso.split('-').map(Number);
+  if ([year, month, day].some((value) => Number.isNaN(value))) return new Date(iso);
+  return new Date(year, month - 1, day);
+};
+
 const getDateFromMonthKey = (key: string) => {
   if (!isValidMonthKey(key)) return new Date();
   const [year, month] = key.split('-').map(Number);
@@ -166,6 +172,7 @@ const isBillDueInMonth = (bill: Bill, month: Date) => {
 const startOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1);
 const endOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0);
 const DAY_MS = 24 * 60 * 60 * 1000;
+const startOfDayValue = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 
 const expandIncomeEntry = (entry: IncomeEntry, month: Date): IncomeOccurrence[] => {
   const recurrence = entry.recurrence ?? 'none';
@@ -343,20 +350,38 @@ function App() {
     }));
   }, [bills]);
 
-  const dueBills = useMemo(
-    () => normalizedBills.filter((bill) => isBillDueInMonth(bill, visibleMonth)),
-    [normalizedBills, visibleMonth]
+  const getBillsForMonth = useCallback(
+    (month: Date) => {
+      const monthKeyForMonth = getMonthKey(month);
+      const overrides = billOverrides[monthKeyForMonth] ?? {};
+      const dueInMonth = normalizedBills.filter((bill) => isBillDueInMonth(bill, month));
+      return dueInMonth.map((bill) => (overrides[bill.id] ? { ...bill, ...overrides[bill.id] } : bill));
+    },
+    [billOverrides, normalizedBills]
   );
 
-  const overridesForVisibleMonth = billOverrides[monthKey] ?? {};
-  const visibleBills = useMemo(
-    () =>
-      dueBills.map((bill) => {
-        const override = overridesForVisibleMonth[bill.id];
-        return override ? { ...bill, ...override } : bill;
-      }),
-    [dueBills, overridesForVisibleMonth]
-  );
+  const visibleBills = useMemo(() => getBillsForMonth(visibleMonth), [getBillsForMonth, visibleMonth]);
+
+  const referenceDate = useMemo(() => {
+    const now = new Date();
+    if (now.getFullYear() === visibleMonth.getFullYear() && now.getMonth() === visibleMonth.getMonth()) {
+      return now;
+    }
+    return new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+  }, [visibleMonth]);
+
+  const expandedIncomes = useMemo(() => {
+    return incomes.flatMap((income) => expandIncomeEntry(income, visibleMonth));
+  }, [incomes, visibleMonth]);
+
+  const incomesByDay = useMemo(() => {
+    const map: Record<number, IncomeOccurrence[]> = {};
+    expandedIncomes.forEach((income) => {
+      const day = getDayFromISODate(income.date);
+      map[day] = map[day] ? [...map[day], income] : [income];
+    });
+    return map;
+  }, [expandedIncomes]);
 
   const billsByDay = useMemo(() => {
     const map: Record<number, Bill[]> = {};
@@ -380,15 +405,18 @@ function App() {
       const inCurrentMonth = date.getMonth() === visibleMonth.getMonth();
       const day = date.getDate();
       const billsForDay = inCurrentMonth ? billsByDay[day] ?? [] : [];
+      const incomesForDay = inCurrentMonth ? incomesByDay[day] ?? [] : [];
       return {
         key: date.toISOString(),
         date,
         day,
         inCurrentMonth,
         bills: billsForDay,
+        incomes: incomesForDay,
+        hasIncome: incomesForDay.length > 0,
       };
     });
-  }, [visibleMonth, billsByDay]);
+  }, [visibleMonth, billsByDay, incomesByDay]);
 
   const totalDue = useMemo(() => visibleBills.reduce((sum, bill) => sum + bill.amount, 0), [visibleBills]);
   const paidSoFar = useMemo(
@@ -399,10 +427,6 @@ function App() {
     [visibleBills, activePayments]
   );
   const remainingDue = totalDue - paidSoFar;
-
-  const expandedIncomes = useMemo(() => {
-    return incomes.flatMap((income) => expandIncomeEntry(income, visibleMonth));
-  }, [incomes, visibleMonth]);
 
   const monthlyIncome = useMemo(() => expandedIncomes.reduce((sum, income) => sum + income.amount, 0), [expandedIncomes]);
 
@@ -640,6 +664,55 @@ function App() {
     [expandedIncomes]
   );
 
+  const nextIncomeSummary = useMemo(() => {
+    const monthsToScan = Array.from({ length: 6 }, (_, idx) => new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + idx, 1));
+    const referenceTime = startOfDayValue(referenceDate);
+    const incomeOccurrences = monthsToScan.flatMap((month) => incomes.flatMap((income) => expandIncomeEntry(income, month)));
+    const sortedIncomes = incomeOccurrences
+      .map((occurrence) => ({ ...occurrence, time: startOfDayValue(parseISODate(occurrence.date)) }))
+      .filter((occurrence) => occurrence.time >= referenceTime)
+      .sort((a, b) => a.time - b.time);
+
+    const nextIncome = sortedIncomes[0];
+    if (!nextIncome) return null;
+
+    const incomeDate = parseISODate(nextIncome.date);
+    const incomeTime = startOfDayValue(incomeDate);
+    const monthsUntilIncome: Date[] = [];
+    const cursor = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+    let safety = 0;
+
+    while (cursor.getTime() <= incomeTime && safety < 12) {
+      monthsUntilIncome.push(new Date(cursor));
+      cursor.setMonth(cursor.getMonth() + 1);
+      safety += 1;
+    }
+
+    const billEntries = monthsUntilIncome.flatMap((month) => {
+      const billsForMonth = getBillsForMonth(month);
+      const monthKeyForMonth = getMonthKey(month);
+      const monthPayments = payments[monthKeyForMonth] ?? {};
+      const maxDay = daysInMonth(month);
+      return billsForMonth.map((bill) => {
+        const dueDate = new Date(month.getFullYear(), month.getMonth(), Math.min(bill.dueDay, maxDay));
+        return { bill, dueDate, paid: Boolean(monthPayments[bill.id]) };
+      });
+    });
+
+    const dueBeforeIncome = billEntries.filter((entry) => startOfDayValue(entry.dueDate) < incomeTime);
+    const totalDue = dueBeforeIncome.reduce((sum, entry) => sum + entry.bill.amount, 0);
+    const remainingDue = dueBeforeIncome.reduce((sum, entry) => (entry.paid ? sum : sum + entry.bill.amount), 0);
+    const unpaidCount = dueBeforeIncome.filter((entry) => !entry.paid).length;
+
+    return {
+      nextIncome,
+      totalDue,
+      remainingDue,
+      billCount: dueBeforeIncome.length,
+      unpaidCount,
+    };
+  }, [getBillsForMonth, incomes, payments, referenceDate, visibleMonth]);
+
   const isEditingExpense = Boolean(editingBill);
   const editingMonthLabel = editingBill
     ? getDateFromMonthKey(editingBill.monthKey).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
@@ -713,7 +786,7 @@ function App() {
                 {calendarCells.map((cell) => (
                   <div
                     key={cell.key}
-                    className={`min-h-[88px] overflow-hidden rounded-xl border p-1 text-[11px] sm:min-h-[120px] sm:p-3 sm:text-sm ${
+                    className={`relative min-h-[88px] overflow-hidden rounded-xl border p-1 text-[11px] sm:min-h-[120px] sm:p-3 sm:text-sm ${
                       cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600'
                     }`}
                   >
@@ -723,58 +796,115 @@ function App() {
                         <span className="ml-auto truncate text-[11px] text-slate-400">
                           {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
                         </span>
-                        )}
-                      </div>
-                      <div className="mt-2 space-y-2">
-                        {cell.bills.map((bill) => {
-                          const paid = Boolean(activePayments[bill.id]);
-                          return (
-                            <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-[11px] sm:text-xs">
-                              <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
-                                <span className="sr-only sm:hidden">{bill.name}</span>
-                                <span
-                                  className={`${
-                                    paid ? 'text-slate-500 line-through' : 'text-slate-100'
-                                  } hidden min-w-0 truncate sm:inline`}
-                                >
-                                  {bill.name}
-                                </span>
-                                <span className={`${paid ? 'text-emerald-400' : 'text-slate-100'} shrink-0`}>
-                                  {currency(bill.amount)}
-                                </span>
-                              </div>
-                              {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
-                              <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
-                                <button
-                                  onClick={() => togglePaid(bill.id)}
-                                  className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
-                                    paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
-                                  }`}
-                                >
-                                  {paid ? 'Paid' : 'Mark Paid'}
-                                </button>
-                                <button
-                                  onClick={() => deleteBill(bill)}
-                                  className="text-slate-500 transition hover:text-rose-400"
-                                  aria-label={`Delete ${bill.name}`}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {cell.inCurrentMonth && cell.bills.length === 0 && (
-                          <p className="text-[11px] text-slate-500">No bills</p>
-                        )}
-                      </div>
+                      )}
                     </div>
-                  ))}
-                </div>
+                    {cell.hasIncome && (
+                      <span
+                        className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-400"
+                        aria-label="Income scheduled"
+                      />
+                    )}
+                    <div className="mt-2 space-y-2">
+                      {cell.bills.map((bill) => {
+                        const paid = Boolean(activePayments[bill.id]);
+                        return (
+                          <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-[11px] sm:text-xs">
+                            <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
+                              <span className="sr-only sm:hidden">{bill.name}</span>
+                              <span
+                                className={`${
+                                  paid ? 'text-slate-500 line-through' : 'text-slate-100'
+                                } hidden min-w-0 truncate sm:inline`}
+                              >
+                                {bill.name}
+                              </span>
+                              <span className={`${paid ? 'text-emerald-400' : 'text-slate-100'} shrink-0`}>
+                                {currency(bill.amount)}
+                              </span>
+                            </div>
+                            {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
+                            <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                              <button
+                                onClick={() => togglePaid(bill.id)}
+                                className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
+                                  paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
+                                }`}
+                              >
+                                {paid ? 'Paid' : 'Mark Paid'}
+                              </button>
+                              <button
+                                onClick={() => deleteBill(bill)}
+                                className="text-slate-500 transition hover:text-rose-400"
+                                aria-label={`Delete ${bill.name}`}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {cell.inCurrentMonth && cell.bills.length === 0 && (
+                        <p className="text-[11px] text-slate-500">No bills</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            </CollapsibleSection>
+            </div>
+          </CollapsibleSection>
 
           <aside className="flex w-full flex-col gap-5 lg:col-span-1">
+            <CollapsibleSection
+              id="next-income"
+              title="Before Next Income"
+              description="Bills scheduled before your next paycheck."
+              collapsed={Boolean(collapsedSections['next-income'])}
+              onToggle={toggleSection}
+            >
+              {nextIncomeSummary ? (
+                <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Next income</p>
+                      <p className="text-base font-semibold text-slate-100">{nextIncomeSummary.nextIncome.source}</p>
+                      <p className="text-xs text-slate-400">
+                        {parseISODate(nextIncomeSummary.nextIncome.date).toLocaleDateString()}
+                      </p>
+                      <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                        {incomeRecurrenceLabels[nextIncomeSummary.nextIncome.entry.recurrence ?? 'none']}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-emerald-300">{currency(nextIncomeSummary.nextIncome.amount)}</p>
+                      <p className="text-[11px] text-slate-500">Scheduled</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-800/80 bg-slate-950/70 p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-100">Expenses before then</p>
+                        <p className="text-[11px] text-slate-400">
+                          {nextIncomeSummary.billCount} {nextIncomeSummary.billCount === 1 ? 'bill' : 'bills'} scheduled
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-base font-semibold text-amber-200">{currency(nextIncomeSummary.totalDue)}</p>
+                        <p className="text-[11px] uppercase tracking-wide text-slate-500">Total due</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-xs text-slate-300">
+                      <span>Unpaid: {nextIncomeSummary.unpaidCount}</span>
+                      <span className={nextIncomeSummary.remainingDue === 0 ? 'text-emerald-300' : 'text-amber-200'}>
+                        Remaining {currency(nextIncomeSummary.remainingDue)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">Log an upcoming income to see which bills come before it.</p>
+              )}
+            </CollapsibleSection>
+
             <CollapsibleSection
               id="weekly"
               title="Weekly Totals"
