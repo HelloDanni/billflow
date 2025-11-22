@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, ReactNode, SyntheticEvent } from 'react';
+import type { FormEvent, MutableRefObject, ReactNode, SyntheticEvent } from 'react';
 import './App.css';
 
 type Bill = {
@@ -38,6 +38,7 @@ type CollapsibleSectionProps = {
   containerClassName?: string;
   collapsed: boolean;
   onToggle: (id: string) => void;
+  sectionRef?: MutableRefObject<HTMLElement | null> | ((node: HTMLElement | null) => void) | null;
 };
 
 const formatISODate = (date: Date) => {
@@ -247,11 +248,12 @@ const CollapsibleSection = ({
   containerClassName,
   collapsed,
   onToggle,
+  sectionRef,
 }: CollapsibleSectionProps) => {
   const contentId = `${id}-content`;
   const sectionClass = containerClassName ?? 'rounded-2xl border border-slate-800 bg-slate-900/80 p-5';
   return (
-    <section className={`w-full max-w-full ${sectionClass}`}>
+    <section id={id} ref={sectionRef ?? undefined} className={`w-full max-w-full ${sectionClass}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
@@ -289,6 +291,7 @@ function App() {
   const [openWeekLabel, setOpenWeekLabel] = useState<string | null>(null);
   const [editingBill, setEditingBill] = useState<EditingBillContext | null>(null);
   const editFormRef = useRef<HTMLDivElement | null>(null);
+  const incomeSummaryRef = useRef<HTMLElement | null>(null);
 
   const billFormDefaults = {
     name: '',
@@ -341,6 +344,14 @@ function App() {
   const activePayments = payments[monthKey] ?? {};
   const toggleSection = (id: string) => {
     setCollapsedSections((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const scrollToIncomeSummary = () => {
+    setCollapsedSections((prev) => {
+      if (!prev['income-summary']) return prev;
+      return { ...prev, 'income-summary': false };
+    });
+    incomeSummaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const moveMonth = (delta: number) => {
@@ -816,7 +827,16 @@ function App() {
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
               <dt className="text-xs uppercase tracking-wide text-slate-400">Income This Month</dt>
-              <dd className="text-2xl font-semibold text-emerald-300">{currency(monthlyIncome)}</dd>
+              <dd>
+                <button
+                  type="button"
+                  onClick={scrollToIncomeSummary}
+                  aria-label="Jump to logged incomes list"
+                  className="mx-auto block text-2xl font-semibold text-emerald-300 transition hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400"
+                >
+                  {currency(monthlyIncome)}
+                </button>
+              </dd>
             </div>
           </dl>
         </CollapsibleSection>
@@ -914,7 +934,7 @@ function App() {
           <aside className="flex w-full flex-col gap-5 lg:col-span-1">
             <CollapsibleSection
               id="next-income"
-              title="Before Next Income"
+              title="Due This Pay Period"
               description="Bills scheduled before your next paycheck."
               collapsed={Boolean(collapsedSections['next-income'])}
               onToggle={toggleSection}
@@ -923,12 +943,15 @@ function App() {
                 <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Next income</p>
+                      <p className="text-sm font-semibold uppercase tracking-wide text-emerald-300">Upcoming income</p>
                       <p className="text-base font-semibold text-slate-100">
-                        {nextIncomeSummary.incomeCount > 1
-                          ? `${nextIncomeSummary.incomeCount} incomes`
-                          : nextIncomeSummary.primaryIncome.source}
+                        {nextIncomeSummary.primaryIncome.source}
                       </p>
+                      {nextIncomeSummary.incomeCount > 1 && (
+                        <p className="text-xs text-slate-400">
+                          {nextIncomeSummary.incomeCount} incomes scheduled
+                        </p>
+                      )}
                       <p className="text-xs text-slate-400">
                         {nextIncomeSummary.coverageStart.getTime() === nextIncomeSummary.coverageEnd.getTime()
                           ? nextIncomeSummary.coverageStart.toLocaleDateString()
@@ -1084,6 +1107,7 @@ function App() {
               description={`Total logged: ${currency(monthlyIncome)}`}
               collapsed={Boolean(collapsedSections['income-summary'])}
               onToggle={toggleSection}
+              sectionRef={incomeSummaryRef}
             >
               <div className="space-y-3">
                 {monthlyIncomeEntries.length > 0 ? (
