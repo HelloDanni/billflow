@@ -986,7 +986,7 @@ function App() {
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-base font-semibold text-amber-200">{currency(nextIncomeSummary.totalDue)}</p>
+                        <p className="text-base font-semibold text-slate-100">{currency(nextIncomeSummary.totalDue)}</p>
                         <p className="text-[11px] uppercase tracking-wide text-slate-500">Total due</p>
                       </div>
                     </div>
