@@ -22,11 +22,9 @@
 - Deployment target: GitHub Pages via `npm run deploy` (publishes `dist/` to the `gh-pages` branch).
 
 ## Environment Details
-- Repository: `/Users/danielle/billflow`
 - Node.js: `v22.15.0`
 - npm: `npm --version` (run locally to confirm; 10.x expected with Node 22)
 - OS: `Darwin MacBookPro 25.1.0 (x86_64)`
 - Tooling: Vite 7, React 19, TypeScript 5.9, Tailwind CSS 4, ESLint 9 (see `package.json` for exact versions)
 
 If you need to continue development, install deps (`npm install`), start the dev server (`npm run dev`), and work through the Next Steps list above.
-
