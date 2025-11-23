@@ -292,6 +292,7 @@ function App() {
   const [editingBill, setEditingBill] = useState<EditingBillContext | null>(null);
   const editFormRef = useRef<HTMLDivElement | null>(null);
   const incomeSummaryRef = useRef<HTMLElement | null>(null);
+  const incomeFormRef = useRef<HTMLElement | null>(null);
 
   const billFormDefaults = {
     name: '',
@@ -308,6 +309,12 @@ function App() {
     date: todayISO,
     recurrence: 'none',
   });
+  const [editingIncomeId, setEditingIncomeId] = useState<string | null>(null);
+  const [selectedDateDetails, setSelectedDateDetails] = useState<{
+    date: Date;
+    bills: Bill[];
+    incomes: IncomeOccurrence[];
+  } | null>(null);
 
   const monthKey = getMonthKey(visibleMonth);
   const openDatePicker = (event: SyntheticEvent<HTMLInputElement>) => {
@@ -346,12 +353,23 @@ function App() {
     setCollapsedSections((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const openDateDetails = (cellDate: Date, billsForDate: Bill[], incomesForDate: IncomeOccurrence[], inCurrentMonth: boolean) => {
+    if (!inCurrentMonth) return;
+    setSelectedDateDetails({ date: cellDate, bills: billsForDate, incomes: incomesForDate });
+  };
+
+  const closeDateDetails = () => setSelectedDateDetails(null);
+
   const scrollToIncomeSummary = () => {
     setCollapsedSections((prev) => {
       if (!prev['income-summary']) return prev;
       return { ...prev, 'income-summary': false };
     });
     incomeSummaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const scrollToIncomeForm = () => {
+    incomeFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const moveMonth = (delta: number) => {
@@ -535,6 +553,19 @@ function App() {
     scrollToEditForm();
   };
 
+  const startEditingIncome = (income: IncomeEntry) => {
+    setEditingIncomeId(income.id);
+    setIncomeForm({
+      source: income.source,
+      amount: String(income.amount),
+      date: income.date,
+      recurrence: income.recurrence ?? 'none',
+    });
+    setCollapsedSections((prev) => ({ ...prev, 'log-income': false }));
+    closeDateDetails();
+    scrollToIncomeForm();
+  };
+
   const handleUpdateBillInstance = () => {
     if (!editingBill) return;
     const values = extractBillFormValues();
@@ -611,17 +642,27 @@ function App() {
     const amount = Number(incomeForm.amount);
     const recurrence = (incomeForm.recurrence as IncomeRecurrence) ?? 'none';
     if (!source || amount <= 0 || !incomeForm.date) return;
-
-    setIncomes((prev) => [
-      ...prev,
-      {
-        id: makeId(),
-        source,
-        amount: normalizeAmount(amount),
-        date: incomeForm.date,
-        recurrence,
-      },
-    ]);
+    if (editingIncomeId) {
+      setIncomes((prev) =>
+        prev.map((entry) =>
+          entry.id === editingIncomeId
+            ? { ...entry, source, amount: normalizeAmount(amount), date: incomeForm.date, recurrence }
+            : entry
+        )
+      );
+      setEditingIncomeId(null);
+    } else {
+      setIncomes((prev) => [
+        ...prev,
+        {
+          id: makeId(),
+          source,
+          amount: normalizeAmount(amount),
+          date: incomeForm.date,
+          recurrence,
+        },
+      ]);
+    }
 
     setIncomeForm({
       source: '',
@@ -631,9 +672,23 @@ function App() {
     });
   };
 
+  const cancelEditingIncome = () => {
+    setEditingIncomeId(null);
+    setIncomeForm({
+      source: '',
+      amount: '',
+      date: todayISO,
+      recurrence: 'none',
+    });
+  };
+
   const deleteIncome = (income: IncomeEntry) => {
-    if (!confirmDelete(`income "${income.source}"`)) return;
+    if (!confirmDelete(`income "${income.source}"`)) return false;
+    if (editingIncomeId === income.id) {
+      cancelEditingIncome();
+    }
     setIncomes((prev) => prev.filter((entry) => entry.id !== income.id));
+    return true;
   };
 
   const togglePaid = (billId: string) => {
@@ -645,7 +700,7 @@ function App() {
   };
 
   const deleteBill = (bill: Bill) => {
-    if (!confirmDelete(`bill "${bill.name}"`)) return;
+    if (!confirmDelete(`bill "${bill.name}"`)) return false;
     const billId = bill.id;
     if (editingBill?.billId === billId) {
       cancelEditingBill();
@@ -678,6 +733,7 @@ function App() {
       });
       return changed ? next : prev;
     });
+    return true;
   };
 
   const monthLabel = visibleMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -856,75 +912,51 @@ function App() {
                   <div key={day}>{day}</div>
                 ))}
               </div>
-              <div className="grid w-full grid-cols-7 gap-1 sm:gap-2 lg:gap-3">
+              <div className="grid w-full grid-cols-7 gap-[2px] rounded-2xl bg-slate-950/40 p-1 sm:gap-1 sm:p-2 lg:gap-2">
                 {calendarCells.map((cell) => {
+                  const dots = cell.bills.map((bill) => ({
+                    id: bill.id,
+                    color: activePayments[bill.id] ? 'bg-emerald-400' : 'bg-amber-300',
+                  }));
+                  const overflowDots = dots.length > 4 ? dots.length - 4 : 0;
                   const cellClasses = [
-                    'relative min-h-[88px] overflow-hidden rounded-xl border p-1 text-[11px] sm:min-h-[120px] sm:p-3 sm:text-sm',
-                    cell.inCurrentMonth ? 'border-slate-800 bg-slate-900' : 'border-transparent bg-transparent text-slate-600',
+                    'relative flex min-h-[74px] flex-col items-center justify-between rounded-xl border text-[12px] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 sm:min-h-[98px] sm:text-sm',
+                    cell.inCurrentMonth ? 'border-slate-800/80 bg-slate-900/70 text-slate-100 hover:border-slate-700' : 'border-transparent bg-transparent text-slate-600',
                   ];
                   if (cell.isToday && cell.inCurrentMonth) {
                     cellClasses.push('ring-2 ring-emerald-400/60');
                   }
+                  const label = `${cell.date.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}: ${cell.bills.length} expense${cell.bills.length === 1 ? '' : 's'}, ${cell.incomes.length} income${cell.incomes.length === 1 ? '' : 's'}`;
                   return (
-                    <div key={cell.key} className={cellClasses.join(' ')}>
-                      <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold sm:text-xs">
-                        <span className={cell.inCurrentMonth ? 'text-slate-200' : 'text-slate-600'}>{cell.day}</span>
-                        {cell.bills.length > 0 && (
-                          <span className="ml-auto truncate text-[11px] text-slate-400">
-                            {currency(cell.bills.reduce((sum, bill) => sum + bill.amount, 0))}
-                          </span>
-                        )}
-                      </div>
-                      {cell.hasIncome && (
+                    <button
+                      key={cell.key}
+                      type="button"
+                      onClick={() => openDateDetails(cell.date, cell.bills, cell.incomes, cell.inCurrentMonth)}
+                      className={cellClasses.join(' ')}
+                      aria-label={label}
+                    >
+                      <div className="flex w-full items-start justify-between px-2 pt-2">
                         <span
-                          className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-400"
-                          aria-label="Income scheduled"
-                        />
-                      )}
-                      <div className="mt-2 space-y-2">
-                        {cell.bills.map((bill) => {
-                          const paid = Boolean(activePayments[bill.id]);
-                          return (
-                            <div key={bill.id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 text-[11px] sm:text-xs">
-                              <div className="flex min-w-0 items-center justify-between gap-2 font-medium">
-                                <span className="sr-only sm:hidden">{bill.name}</span>
-                                <span
-                                  className={`${
-                                    paid ? 'text-slate-500 line-through' : 'text-slate-100'
-                                  } hidden min-w-0 truncate sm:inline`}
-                                >
-                                  {bill.name}
-                                </span>
-                                <span className={`${paid ? 'text-emerald-400' : 'text-slate-100'} shrink-0`}>
-                                  {currency(bill.amount)}
-                                </span>
-                              </div>
-                              {bill.notes && <p className="text-[10px] text-slate-400">{bill.notes}</p>}
-                              <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
-                                <button
-                                  onClick={() => togglePaid(bill.id)}
-                                  className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
-                                    paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
-                                  }`}
-                                >
-                                  {paid ? 'Paid' : 'Mark Paid'}
-                                </button>
-                                <button
-                                  onClick={() => deleteBill(bill)}
-                                  className="text-slate-500 transition hover:text-rose-400"
-                                  aria-label={`Delete ${bill.name}`}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {cell.inCurrentMonth && cell.bills.length === 0 && (
-                          <p className="text-[11px] text-slate-500">No bills</p>
+                          className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold ${
+                            cell.inCurrentMonth ? 'text-slate-100' : 'text-slate-600'
+                          } ${cell.isToday && cell.inCurrentMonth ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-400/70' : ''}`}
+                        >
+                          {cell.day}
+                        </span>
+                        {cell.hasIncome && cell.inCurrentMonth && (
+                          <span className="mt-1 h-2 w-2 rounded-full bg-sky-300" aria-label="Income scheduled" />
                         )}
                       </div>
-                    </div>
+                      <div className="mb-2 mt-3 flex flex-wrap items-center justify-center gap-1 px-2">
+                        {dots.slice(0, 4).map((dot, index) => (
+                          <span key={`${dot.id}-${index}`} className={`h-2.5 w-2.5 rounded-full ${dot.color}`} />
+                        ))}
+                        {overflowDots > 0 && <span className="text-[10px] text-slate-400">+{overflowDots}</span>}
+                        {dots.length === 0 && !cell.hasIncome && cell.inCurrentMonth && (
+                          <span className="text-[11px] text-slate-500">•</span>
+                        )}
+                      </div>
+                    </button>
                   );
                 })}
               </div>
@@ -1275,8 +1307,14 @@ function App() {
             description="Capture every paycheck or deposit."
             collapsed={Boolean(collapsedSections['log-income'])}
             onToggle={toggleSection}
+            sectionRef={incomeFormRef}
           >
             <form className="flex flex-col gap-3" onSubmit={handleIncomeSubmit}>
+              {editingIncomeId && (
+                <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+                  Editing income entry. Save your changes or cancel to add a new one.
+                </div>
+              )}
               <label className="text-sm">
                 <span className="text-slate-300">Source</span>
                 <input
@@ -1328,12 +1366,165 @@ function App() {
                 type="submit"
                 className="mt-2 rounded-xl bg-sky-500/90 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
               >
-                Add Income
+                {editingIncomeId ? 'Save Income' : 'Add Income'}
               </button>
+              {editingIncomeId && (
+                <button
+                  type="button"
+                  onClick={cancelEditingIncome}
+                  className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-500"
+                >
+                  Cancel
+                </button>
+              )}
             </form>
           </CollapsibleSection>
         </div>
       </div>
+      {selectedDateDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-3 py-6 backdrop-blur">
+          <div className="w-full max-w-xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/95 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-400">Scheduled for</p>
+                <p className="text-lg font-semibold text-slate-50">
+                  {selectedDateDetails.date.toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeDateDetails}
+                className="rounded-full border border-slate-700/70 p-2 text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+                aria-label="Close schedule details"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-4 p-4">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-slate-100">Expenses</p>
+                  <span className="text-xs text-slate-400">
+                    {selectedDateDetails.bills.length} {selectedDateDetails.bills.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+                {selectedDateDetails.bills.length > 0 ? (
+                  <ul className="space-y-2">
+                    {selectedDateDetails.bills.map((bill) => {
+                      const paid = Boolean(activePayments[bill.id]);
+                      return (
+                        <li
+                          key={bill.id}
+                          className="rounded-xl border border-slate-800/70 bg-slate-950/50 p-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className={`truncate text-sm font-semibold ${paid ? 'text-emerald-200' : 'text-slate-100'}`}>
+                                {bill.name}
+                              </p>
+                              <p className="text-xs text-slate-400">{currency(bill.amount)}</p>
+                            </div>
+                            <span
+                              className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase ${
+                                paid ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'
+                              }`}
+                            >
+                              {paid ? 'Paid' : 'Due'}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => togglePaid(bill.id)}
+                              className="rounded-lg border border-slate-700/70 px-3 py-1 font-semibold uppercase tracking-wide text-slate-200 transition hover:border-emerald-400 hover:text-emerald-200"
+                            >
+                              Mark {paid ? 'Unpaid' : 'Paid'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                closeDateDetails();
+                                startEditingExistingBill(bill, selectedDateDetails.date);
+                              }}
+                              className="rounded-lg border border-slate-700/70 px-3 py-1 font-semibold uppercase tracking-wide text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (deleteBill(bill)) {
+                                  closeDateDetails();
+                                }
+                              }}
+                              className="rounded-lg border border-slate-700/70 px-3 py-1 font-semibold uppercase tracking-wide text-rose-200 transition hover:border-rose-400 hover:text-rose-100"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-slate-500">No expenses for this date.</p>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-slate-100">Income</p>
+                  <span className="text-xs text-slate-400">
+                    {selectedDateDetails.incomes.length} {selectedDateDetails.incomes.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+                {selectedDateDetails.incomes.length > 0 ? (
+                  <ul className="space-y-2">
+                    {selectedDateDetails.incomes.map((income) => (
+                      <li
+                        key={income.occurrenceId}
+                        className="rounded-xl border border-slate-800/70 bg-slate-950/50 p-3"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-100">{income.source}</p>
+                            <p className="text-xs text-slate-400">{currency(income.amount)}</p>
+                            <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                              {incomeRecurrenceLabels[income.entry.recurrence ?? 'none']}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => startEditingIncome(income.entry)}
+                              className="rounded-lg border border-slate-700/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (deleteIncome(income.entry)) {
+                                  closeDateDetails();
+                                }
+                              }}
+                              className="rounded-lg border border-slate-700/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-rose-200 transition hover:border-rose-400 hover:text-rose-100"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-slate-500">No income scheduled for this date.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
